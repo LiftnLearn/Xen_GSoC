@@ -530,13 +530,13 @@ int xc_version(xc_interface *xch, int cmd, void *arg)
     return rc;
 }
 
-int xc_trace_pc(xc_interface *xch,
-    domid_t dom_id, int mode, unsigned int size, uint64_t* arg)
+int xc_trace_pc(xc_interface *xch, domid_t dom_id,
+                int mode, unsigned int size, uint64_t* arg)
 {
     int rc;
 
     DECLARE_HYPERCALL_BOUNCE(arg, size * sizeof(uint64_t),
-        XC_HYPERCALL_BUFFER_BOUNCE_OUT);
+                             XC_HYPERCALL_BUFFER_BOUNCE_OUT);
 
     if ( xc_hypercall_bounce_pre(xch, arg) )
     {

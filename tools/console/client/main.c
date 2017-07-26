@@ -486,7 +486,7 @@ int main(int argc, char **argv)
 		close(start_notify_fd);
 	}
 
-	console_loop(spty, xs, path, interactive || pipe);
+	console_loop(spty, xs, path, interactive);
 
 	free(path);
 	free(dom_path);

@@ -1,8 +1,8 @@
 /******************************************************************************
  * trace_pc.h
- * 
+ *
  * Macros for program counter tracing hypercall.
- * 
+ *
  * Copyright (C) 2017 Felix Schmoll <eggi.innovations@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person

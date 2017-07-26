@@ -233,8 +233,8 @@ static inline int do_trace_pc(xc_interface *xch, domid_t dom_id, int mode,
                               unsigned int size, xc_hypercall_buffer_t *buf)
 {
     DECLARE_HYPERCALL_BUFFER_ARGUMENT(buf);
-    return xencall4(xch->xcall, __HYPERVISOR_trace_pc, dom_id, mode,
-        size, HYPERCALL_BUFFER_AS_ARG(buf));
+    return xencall4(xch->xcall, __HYPERVISOR_trace_pc, dom_id,
+                    mode, size, HYPERCALL_BUFFER_AS_ARG(buf));
 }
 
 static inline int do_physdev_op(xc_interface *xch, int cmd, void *op, size_t len)

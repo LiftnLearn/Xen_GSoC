@@ -4,7 +4,7 @@
  * Implementation of the program counter tracing hypercall.
  *
  * Copyright (c) 2017 Felix Schmoll <eggi.innovations@gmail.com>
- * 
+ *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms and conditions of the GNU General Public
  * License, version 2, as published by the Free Software Foundation.
@@ -24,7 +24,7 @@
 #include <public/trace_pc.h>
 
 long do_trace_pc(domid_t dom, int mode, unsigned int size,
-    XEN_GUEST_HANDLE_PARAM(uint64_t) buf)
+                 XEN_GUEST_HANDLE_PARAM(uint64_t) buf)
 {
 #ifdef CONFIG_TRACE_PC
     int ret = 0;
@@ -40,39 +40,39 @@ long do_trace_pc(domid_t dom, int mode, unsigned int size,
 
     switch ( mode )
     {
-        case XEN_TRACE_PC_START:
+    case XEN_TRACE_PC_START:
+    {
+        if ( d->tracing_buffer )
         {
-            if ( d->tracing_buffer )
-            {
-                ret = -EBUSY; /* domain already being traced */
-                break;
-            }
-
-            d->tracing_buffer_pos = 0;
-            d->tracing_buffer_size = size;
-            d->tracing_buffer = xmalloc_array(uint64_t, size);
-
-            if ( !d->tracing_buffer )
-                ret = -ENOMEM;
+            ret = -EBUSY; /* domain already being traced */
             break;
         }
 
-        case XEN_TRACE_PC_STOP:
-        {
-            uint64_t* temp = d->tracing_buffer;
-            d->tracing_buffer = NULL;
+        d->tracing_buffer_pos = 0;
+        d->tracing_buffer_size = size;
+        d->tracing_buffer = xmalloc_array(uint64_t, size);
 
-            if ( copy_to_guest(buf, temp, d->tracing_buffer_pos) )
-                ret = -EFAULT;
+        if ( !d->tracing_buffer )
+            ret = -ENOMEM;
+        break;
+    }
 
-            xfree(temp);
+    case XEN_TRACE_PC_STOP:
+    {
+        uint64_t* temp = d->tracing_buffer;
+        d->tracing_buffer = NULL;
 
-            ret = d->tracing_buffer_pos;
-            break;
-        }
+        if ( copy_to_guest(buf, temp, d->tracing_buffer_pos) )
+            ret = -EFAULT;
 
-        default:
-            ret = -ENOSYS;
+        xfree(temp);
+
+        ret = d->tracing_buffer_pos;
+        break;
+    }
+
+    default:
+        ret = -ENOSYS;
     }
 
     if ( dom != DOMID_SELF )
