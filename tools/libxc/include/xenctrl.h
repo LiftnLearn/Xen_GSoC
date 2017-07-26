@@ -1795,10 +1795,6 @@ int xc_domain_debug_control(xc_interface *xch,
                             uint32_t vcpu);
 
 #if defined(__i386__) || defined(__x86_64__)
-int xc_cpuid_check(xc_interface *xch,
-                   const unsigned int *input,
-                   const char **config,
-                   char **config_transformed);
 int xc_cpuid_set(xc_interface *xch,
                  domid_t domid,
                  const unsigned int *input,
@@ -1811,6 +1807,8 @@ int xc_cpuid_apply_policy(xc_interface *xch,
 void xc_cpuid_to_str(const unsigned int *regs,
                      char **strs); /* some strs[] may be NULL if ENOMEM */
 int xc_mca_op(xc_interface *xch, struct xen_mc *mc);
+int xc_mca_op_inject_v2(xc_interface *xch, unsigned int flags,
+                        xc_cpumap_t cpumap, unsigned int nr_cpus);
 #endif
 
 struct xc_px_val {

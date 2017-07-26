@@ -301,6 +301,9 @@ integer_param("credit2_balance_over", opt_overload_balance_tolerance);
  * want that to happen basing on topology. At the moment, it is possible
  * to choose to arrange runqueues to be:
  *
+ * - per-cpu: meaning that there will be one runqueue per logical cpu. This
+ *            will happen when if the opt_runqueue parameter is set to 'cpu'.
+ *
  * - per-core: meaning that there will be one runqueue per each physical
  *             core of the host. This will happen if the opt_runqueue
  *             parameter is set to 'core';
@@ -322,11 +325,13 @@ integer_param("credit2_balance_over", opt_overload_balance_tolerance);
  * either the same physical core, the same physical socket, the same NUMA
  * node, or just all of them, will be put together to form runqueues.
  */
-#define OPT_RUNQUEUE_CORE   0
-#define OPT_RUNQUEUE_SOCKET 1
-#define OPT_RUNQUEUE_NODE   2
-#define OPT_RUNQUEUE_ALL    3
+#define OPT_RUNQUEUE_CPU    0
+#define OPT_RUNQUEUE_CORE   1
+#define OPT_RUNQUEUE_SOCKET 2
+#define OPT_RUNQUEUE_NODE   3
+#define OPT_RUNQUEUE_ALL    4
 static const char *const opt_runqueue_str[] = {
+    [OPT_RUNQUEUE_CPU] = "cpu",
     [OPT_RUNQUEUE_CORE] = "core",
     [OPT_RUNQUEUE_SOCKET] = "socket",
     [OPT_RUNQUEUE_NODE] = "node",
@@ -355,78 +360,85 @@ custom_param("credit2_runqueue", parse_credit2_runqueue);
  * Per-runqueue data
  */
 struct csched2_runqueue_data {
-    int id;
+    spinlock_t lock;           /* Lock for this runqueue                     */
 
-    spinlock_t lock;      /* Lock for this runqueue. */
-    cpumask_t active;      /* CPUs enabled for this runqueue */
+    struct list_head runq;     /* Ordered list of runnable vms               */
+    int id;                    /* ID of this runqueue (-1 if invalid)        */
 
-    struct list_head runq; /* Ordered list of runnable vms */
-    struct list_head svc;  /* List of all vcpus assigned to this runqueue */
-    unsigned int max_weight;
-    unsigned int pick_bias;/* Last CPU we picked. Start from it next time */
+    int load;                  /* Instantaneous load (num of non-idle vcpus) */
+    s_time_t load_last_update; /* Last time average was updated              */
+    s_time_t avgload;          /* Decaying queue load                        */
+    s_time_t b_avgload;        /* Decaying queue load modified by balancing  */
 
-    cpumask_t idle,        /* Currently idle pcpus */
-        smt_idle,          /* Fully idle-and-untickled cores (see below) */
-        tickled;           /* Have been asked to go through schedule */
-    int load;              /* Instantaneous load: Length of queue  + num non-idle threads */
-    s_time_t load_last_update;  /* Last time average was updated */
-    s_time_t avgload;           /* Decaying queue load */
-    s_time_t b_avgload;         /* Decaying queue load modified by balancing */
+    cpumask_t active,          /* CPUs enabled for this runqueue             */
+        smt_idle,              /* Fully idle-and-untickled cores (see below) */
+        tickled,               /* Have been asked to go through schedule     */
+        idle;                  /* Currently idle pcpus                       */
+
+    struct list_head svc;      /* List of all vcpus assigned to the runqueue */
+    unsigned int max_weight;   /* Max weight of the vcpus in this runqueue   */
+    unsigned int pick_bias;    /* Last picked pcpu. Start from it next time  */
 };
 
 /*
  * System-wide private data
  */
 struct csched2_private {
-    rwlock_t lock;
-    cpumask_t initialized; /* CPU is initialized for this pool */
-    
-    struct list_head sdom; /* Used mostly for dump keyhandler. */
+    rwlock_t lock;                     /* Private scheduler lock             */
 
-    int runq_map[NR_CPUS];
-    cpumask_t active_queues; /* Queues which may have active cpus */
-    struct csched2_runqueue_data rqd[NR_CPUS];
+    unsigned int load_precision_shift; /* Precision of load calculations     */
+    unsigned int load_window_shift;    /* Lenght of load decaying window     */
+    unsigned int ratelimit_us;         /* Rate limiting for this scheduler   */
 
-    unsigned int load_precision_shift;
-    unsigned int load_window_shift;
-    unsigned ratelimit_us; /* each cpupool can have its own ratelimit */
+    cpumask_t active_queues;           /* Runqueues with (maybe) active cpus */
+    struct csched2_runqueue_data *rqd; /* Data of the various runqueues      */
+
+    cpumask_t initialized;             /* CPUs part of this scheduler        */
+    struct list_head sdom;             /* List of domains (for debug key)    */
 };
+
+/*
+ * Physical CPU
+ *
+ * The only per-pCPU information we need to maintain is of which runqueue
+ * each CPU is part of.
+ */
+static DEFINE_PER_CPU(int, runq_map);
 
 /*
  * Virtual CPU
  */
 struct csched2_vcpu {
-    struct list_head rqd_elem;         /* On the runqueue data list  */
-    struct list_head runq_elem;        /* On the runqueue            */
-    struct csched2_runqueue_data *rqd; /* Up-pointer to the runqueue */
+    struct list_head rqd_elem;         /* On csched2_runqueue_data's svc list */
+    struct csched2_runqueue_data *rqd; /* Up-pointer to the runqueue          */
 
-    /* Up-pointers */
-    struct csched2_dom *sdom;
-    struct vcpu *vcpu;
+    int credit;                        /* Current amount of credit            */
+    unsigned int weight;               /* Weight of this vcpu                 */
+    unsigned int residual;             /* Reminder of div(max_weight/weight)  */
+    unsigned flags;                    /* Status flags (16 bits would be ok,  */
+                                       /* but clear_bit() does not like that) */
+    s_time_t start_time;               /* Time we were scheduled (for credit) */
 
-    unsigned int weight;
-    unsigned int residual;
+    /* Individual contribution to load                                        */
+    s_time_t load_last_update;         /* Last time average was updated       */
+    s_time_t avgload;                  /* Decaying queue load                 */
 
-    int credit;
-    s_time_t start_time; /* When we were scheduled (used for credit) */
-    unsigned flags;      /* 16 bits doesn't seem to play well with clear_bit() */
-    int tickled_cpu;     /* cpu tickled for picking us up (-1 if none) */
+    struct list_head runq_elem;        /* On the runqueue (rqd->runq)         */
+    struct csched2_dom *sdom;          /* Up-pointer to domain                */
+    struct vcpu *vcpu;                 /* Up-pointer, to vcpu                 */
 
-    /* Individual contribution to load */
-    s_time_t load_last_update;  /* Last time average was updated */
-    s_time_t avgload;           /* Decaying queue load */
-
-    struct csched2_runqueue_data *migrate_rqd; /* Pre-determined rqd to which to migrate */
+    struct csched2_runqueue_data *migrate_rqd; /* Pre-determined migr. target */
+    int tickled_cpu;                   /* Cpu that will pick us (-1 if none)  */
 };
 
 /*
  * Domain
  */
 struct csched2_dom {
-    struct list_head sdom_elem;
-    struct domain *dom;
-    uint16_t weight;
-    uint16_t nr_vcpus;
+    struct list_head sdom_elem; /* On csched2_runqueue_data's sdom list       */
+    struct domain *dom;         /* Up-pointer to domain                       */
+    uint16_t weight;            /* User specified weight                      */
+    uint16_t nr_vcpus;          /* Number of vcpus of this domain             */
 };
 
 /*
@@ -448,16 +460,16 @@ static inline struct csched2_dom *csched2_dom(const struct domain *d)
 }
 
 /* CPU to runq_id macro */
-static inline int c2r(const struct scheduler *ops, unsigned int cpu)
+static inline int c2r(unsigned int cpu)
 {
-    return csched2_priv(ops)->runq_map[(cpu)];
+    return per_cpu(runq_map, cpu);
 }
 
 /* CPU to runqueue struct macro */
 static inline struct csched2_runqueue_data *c2rqd(const struct scheduler *ops,
                                                   unsigned int cpu)
 {
-    return &csched2_priv(ops)->rqd[c2r(ops, cpu)];
+    return &csched2_priv(ops)->rqd[c2r(cpu)];
 }
 
 /*
@@ -683,6 +695,8 @@ cpu_to_runqueue(struct csched2_private *prv, unsigned int cpu)
         BUG_ON(cpu_to_socket(cpu) == XEN_INVALID_SOCKET_ID ||
                cpu_to_socket(peer_cpu) == XEN_INVALID_SOCKET_ID);
 
+        if (opt_runqueue == OPT_RUNQUEUE_CPU)
+            continue;
         if ( opt_runqueue == OPT_RUNQUEUE_ALL ||
              (opt_runqueue == OPT_RUNQUEUE_CORE && same_core(peer_cpu, cpu)) ||
              (opt_runqueue == OPT_RUNQUEUE_SOCKET && same_socket(peer_cpu, cpu)) ||
@@ -1082,7 +1096,7 @@ runq_insert(const struct scheduler *ops, struct csched2_vcpu *svc)
     ASSERT(spin_is_locked(per_cpu(schedule_data, cpu).schedule_lock));
 
     ASSERT(!vcpu_on_runq(svc));
-    ASSERT(c2r(ops, cpu) == c2r(ops, svc->vcpu->processor));
+    ASSERT(c2r(cpu) == c2r(svc->vcpu->processor));
 
     ASSERT(&svc->rqd->runq == runq);
     ASSERT(!is_idle_vcpu(svc->vcpu));
@@ -1733,7 +1747,7 @@ csched2_cpu_pick(const struct scheduler *ops, struct vcpu *vc)
     if ( min_rqi == -1 )
     {
         new_cpu = get_fallback_cpu(svc);
-        min_rqi = c2r(ops, new_cpu);
+        min_rqi = c2r(new_cpu);
         min_avgload = prv->rqd[min_rqi].b_avgload;
         goto out_up;
     }
@@ -2622,7 +2636,7 @@ csched2_schedule(
             unsigned tasklet:8, idle:8, smt_idle:8, tickled:8;
         } d;
         d.cpu = cpu;
-        d.rq_id = c2r(ops, cpu);
+        d.rq_id = c2r(cpu);
         d.tasklet = tasklet_work_scheduled;
         d.idle = is_idle_vcpu(current);
         d.smt_idle = cpumask_test_cpu(cpu, &rqd->smt_idle);
@@ -2783,7 +2797,7 @@ dump_pcpu(const struct scheduler *ops, int cpu)
 #define cpustr keyhandler_scratch
 
     cpumask_scnprintf(cpustr, sizeof(cpustr), per_cpu(cpu_sibling_mask, cpu));
-    printk("CPU[%02d] runq=%d, sibling=%s, ", cpu, c2r(ops, cpu), cpustr);
+    printk("CPU[%02d] runq=%d, sibling=%s, ", cpu, c2r(cpu), cpustr);
     cpumask_scnprintf(cpustr, sizeof(cpustr), per_cpu(cpu_core_mask, cpu));
     printk("core=%s\n", cpustr);
 
@@ -2930,7 +2944,7 @@ init_pdata(struct csched2_private *prv, unsigned int cpu)
     }
     
     /* Set the runqueue map */
-    prv->runq_map[cpu] = rqi;
+    per_cpu(runq_map, cpu) = rqi;
     
     __cpumask_set_cpu(cpu, &rqd->idle);
     __cpumask_set_cpu(cpu, &rqd->active);
@@ -3034,7 +3048,7 @@ csched2_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
     ASSERT(!pcpu && cpumask_test_cpu(cpu, &prv->initialized));
     
     /* Find the old runqueue and remove this cpu from it */
-    rqi = prv->runq_map[cpu];
+    rqi = per_cpu(runq_map, cpu);
 
     rqd = prv->rqd + rqi;
 
@@ -3054,6 +3068,8 @@ csched2_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
     }
     else if ( rqd->pick_bias == cpu )
         rqd->pick_bias = cpumask_first(&rqd->active);
+
+    per_cpu(runq_map, cpu) = -1;
 
     spin_unlock(&rqd->lock);
 
@@ -3099,9 +3115,11 @@ csched2_init(struct scheduler *ops)
     printk(XENLOG_INFO "load tracking window length %llu ns\n",
            1ULL << opt_load_window_shift);
 
-    /* Basically no CPU information is available at this point; just
+    /*
+     * Basically no CPU information is available at this point; just
      * set up basic structures, and a callback when the CPU info is
-     * available. */
+     * available.
+     */
 
     prv = xzalloc(struct csched2_private);
     if ( prv == NULL )
@@ -3111,12 +3129,16 @@ csched2_init(struct scheduler *ops)
     rwlock_init(&prv->lock);
     INIT_LIST_HEAD(&prv->sdom);
 
-    /* But un-initialize all runqueues */
-    for ( i = 0; i < nr_cpu_ids; i++ )
+    /* Allocate all runqueues and mark them as un-initialized */
+    prv->rqd = xzalloc_array(struct csched2_runqueue_data, nr_cpu_ids);
+    if ( !prv->rqd )
     {
-        prv->runq_map[i] = -1;
-        prv->rqd[i].id = -1;
+        xfree(prv);
+        return -ENOMEM;
     }
+    for ( i = 0; i < nr_cpu_ids; i++ )
+        prv->rqd[i].id = -1;
+
     /* initialize ratelimit */
     prv->ratelimit_us = sched_ratelimit_us;
 

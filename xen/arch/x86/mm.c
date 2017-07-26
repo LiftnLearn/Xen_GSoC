@@ -716,32 +716,30 @@ int map_ldt_shadow_page(unsigned int off)
 }
 
 
-static int get_page_from_pagenr(unsigned long page_nr, struct domain *d)
+static bool get_page_from_mfn(mfn_t mfn, struct domain *d)
 {
-    struct page_info *page = mfn_to_page(page_nr);
+    struct page_info *page = mfn_to_page(mfn_x(mfn));
 
-    if ( unlikely(!mfn_valid(_mfn(page_nr))) || unlikely(!get_page(page, d)) )
+    if ( unlikely(!mfn_valid(mfn)) || unlikely(!get_page(page, d)) )
     {
         gdprintk(XENLOG_WARNING,
-                 "Could not get page ref for mfn %"PRI_mfn"\n", page_nr);
-        return 0;
+                 "Could not get page ref for mfn %"PRI_mfn"\n", mfn_x(mfn));
+        return false;
     }
 
-    return 1;
+    return true;
 }
 
 
-static int get_page_and_type_from_pagenr(unsigned long page_nr,
-                                         unsigned long type,
-                                         struct domain *d,
-                                         int partial,
-                                         int preemptible)
+static int get_page_and_type_from_mfn(
+    mfn_t mfn, unsigned long type, struct domain *d,
+    int partial, int preemptible)
 {
-    struct page_info *page = mfn_to_page(page_nr);
+    struct page_info *page = mfn_to_page(mfn_x(mfn));
     int rc;
 
     if ( likely(partial >= 0) &&
-         unlikely(!get_page_from_pagenr(page_nr, d)) )
+         unlikely(!get_page_from_mfn(mfn, d)) )
         return -EINVAL;
 
     rc = (preemptible ?
@@ -795,7 +793,7 @@ get_##level##_linear_pagetable(                                             \
     if ( (pfn = level##e_get_pfn(pde)) != pde_pfn )                         \
     {                                                                       \
         /* Make sure the mapped frame belongs to the correct domain. */     \
-        if ( unlikely(!get_page_from_pagenr(pfn, d)) )                      \
+        if ( unlikely(!get_page_from_mfn(_mfn(pfn), d)) )                   \
             return 0;                                                       \
                                                                             \
         /*                                                                  \
@@ -1125,7 +1123,7 @@ get_page_from_l2e(
 
     if ( !(l2e_get_flags(l2e) & _PAGE_PSE) )
     {
-        rc = get_page_and_type_from_pagenr(mfn, PGT_l1_page_table, d, 0, 0);
+        rc = get_page_and_type_from_mfn(_mfn(mfn), PGT_l1_page_table, d, 0, 0);
         if ( unlikely(rc == -EINVAL) && get_l2_linear_pagetable(l2e, pfn, d) )
             rc = 0;
         return rc;
@@ -1165,8 +1163,8 @@ get_page_from_l3e(
         return -EINVAL;
     }
 
-    rc = get_page_and_type_from_pagenr(
-        l3e_get_pfn(l3e), PGT_l2_page_table, d, partial, 1);
+    rc = get_page_and_type_from_mfn(
+        _mfn(l3e_get_pfn(l3e)), PGT_l2_page_table, d, partial, 1);
     if ( unlikely(rc == -EINVAL) &&
          !is_pv_32bit_domain(d) &&
          get_l3_linear_pagetable(l3e, pfn, d) )
@@ -1192,8 +1190,8 @@ get_page_from_l4e(
         return -EINVAL;
     }
 
-    rc = get_page_and_type_from_pagenr(
-        l4e_get_pfn(l4e), PGT_l3_page_table, d, partial, 1);
+    rc = get_page_and_type_from_mfn(
+        _mfn(l4e_get_pfn(l4e)), PGT_l3_page_table, d, partial, 1);
     if ( unlikely(rc == -EINVAL) && get_l4_linear_pagetable(l4e, pfn, d) )
         rc = 0;
 
@@ -1547,10 +1545,9 @@ static int alloc_l3_table(struct page_info *page)
                  (l3e_get_flags(pl3e[i]) & l3_disallow_mask(d)) )
                 rc = -EINVAL;
             else
-                rc = get_page_and_type_from_pagenr(l3e_get_pfn(pl3e[i]),
-                                                   PGT_l2_page_table |
-                                                   PGT_pae_xen_l2,
-                                                   d, partial, 1);
+                rc = get_page_and_type_from_mfn(
+                    _mfn(l3e_get_pfn(pl3e[i])),
+                    PGT_l2_page_table | PGT_pae_xen_l2, d, partial, 1);
         }
         else if ( !is_guest_l3_slot(i) ||
                   (rc = get_page_from_l3e(pl3e[i], pfn, d, partial)) > 0 )
@@ -3001,8 +2998,8 @@ int new_guest_cr3(unsigned long mfn)
     }
 
     rc = paging_mode_refcounts(d)
-         ? (get_page_from_pagenr(mfn, d) ? 0 : -EINVAL)
-         : get_page_and_type_from_pagenr(mfn, PGT_root_page_table, d, 0, 1);
+         ? (get_page_from_mfn(_mfn(mfn), d) ? 0 : -EINVAL)
+         : get_page_and_type_from_mfn(_mfn(mfn), PGT_root_page_table, d, 0, 1);
     switch ( rc )
     {
     case 0:
@@ -3377,9 +3374,8 @@ long do_mmuext_op(
 
             if ( op.arg1.mfn != 0 )
             {
-                rc = get_page_and_type_from_pagenr(op.arg1.mfn,
-                                                   PGT_root_page_table,
-                                                   currd, 0, 1);
+                rc = get_page_and_type_from_mfn(
+                    _mfn(op.arg1.mfn), PGT_root_page_table, currd, 0, 1);
 
                 if ( unlikely(rc) )
                 {
@@ -3924,7 +3920,7 @@ long do_mmu_update(
                 xsm_checked = xsm_needed;
             }
 
-            if ( unlikely(!get_page_from_pagenr(mfn, pg_owner)) )
+            if ( unlikely(!get_page_from_mfn(_mfn(mfn), pg_owner)) )
             {
                 gdprintk(XENLOG_WARNING,
                          "Could not get page for mach->phys update\n");
@@ -4138,7 +4134,7 @@ static int create_grant_va_mapping(
         return GNTST_general_error;
     }
 
-    if ( !get_page_from_pagenr(gl1mfn, current->domain) )
+    if ( !get_page_from_mfn(_mfn(gl1mfn), current->domain) )
     {
         guest_unmap_l1e(pl1e);
         return GNTST_general_error;
@@ -4188,7 +4184,7 @@ static int replace_grant_va_mapping(
         return GNTST_general_error;
     }
 
-    if ( !get_page_from_pagenr(gl1mfn, current->domain) )
+    if ( !get_page_from_mfn(_mfn(gl1mfn), current->domain) )
     {
         rc = GNTST_general_error;
         goto out;
@@ -4357,7 +4353,7 @@ int replace_grant_host_mapping(
         return GNTST_general_error;
     }
 
-    if ( !get_page_from_pagenr(gl1mfn, current->domain) )
+    if ( !get_page_from_mfn(_mfn(gl1mfn), current->domain) )
     {
         guest_unmap_l1e(pl1e);
         return GNTST_general_error;
@@ -4528,7 +4524,7 @@ static int __do_update_va_mapping(
 
     rc = -EINVAL;
     pl1e = guest_map_l1e(va, &gl1mfn);
-    if ( unlikely(!pl1e || !get_page_from_pagenr(gl1mfn, d)) )
+    if ( unlikely(!pl1e || !get_page_from_mfn(_mfn(gl1mfn), d)) )
         goto out;
 
     gl1pg = mfn_to_page(gl1mfn);
@@ -4900,7 +4896,7 @@ int xenmem_add_to_physmap_one(
                 put_gfn(d, gfn);
                 return -ENOMEM;
             }
-            if ( !get_page_from_pagenr(idx, d) )
+            if ( !get_page_from_mfn(_mfn(idx), d) )
                 break;
             mfn = idx;
             page = mfn_to_page(mfn);
@@ -5440,7 +5436,7 @@ int ptwr_do_page_fault(struct vcpu *v, unsigned long addr,
     /* We are looking only for read-only mappings of p.t. pages. */
     if ( ((l1e_get_flags(pte) & (_PAGE_PRESENT|_PAGE_RW)) != _PAGE_PRESENT) ||
          rangeset_contains_singleton(mmio_ro_ranges, l1e_get_pfn(pte)) ||
-         !get_page_from_pagenr(l1e_get_pfn(pte), d) )
+         !get_page_from_mfn(_mfn(l1e_get_pfn(pte)), d) )
         goto bail;
 
     page = l1e_get_page(pte);

@@ -873,7 +873,7 @@ static int __hvmemul_read(
 
     if ( is_x86_system_segment(seg) )
         pfec |= PFEC_implicit;
-    else if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    else if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     rc = hvmemul_virtual_to_linear(
@@ -939,7 +939,8 @@ int hvmemul_insn_fetch(
 {
     struct hvm_emulate_ctxt *hvmemul_ctxt =
         container_of(ctxt, struct hvm_emulate_ctxt, ctxt);
-    unsigned int insn_off = offset - hvmemul_ctxt->insn_buf_eip;
+    /* Careful, as offset can wrap or truncate WRT insn_buf_eip. */
+    uint8_t insn_off = offset - hvmemul_ctxt->insn_buf_eip;
 
     /*
      * Fall back if requested bytes are not in the prefetch cache.
@@ -953,7 +954,17 @@ int hvmemul_insn_fetch(
 
         if ( rc == X86EMUL_OKAY && bytes )
         {
-            ASSERT(insn_off + bytes <= sizeof(hvmemul_ctxt->insn_buf));
+            /*
+             * Will we overflow insn_buf[]?  This shouldn't be able to happen,
+             * which means something went wrong with instruction decoding...
+             */
+            if ( insn_off > sizeof(hvmemul_ctxt->insn_buf) ||
+                 (insn_off + bytes) > sizeof(hvmemul_ctxt->insn_buf) )
+            {
+                ASSERT_UNREACHABLE();
+                return X86EMUL_UNHANDLEABLE;
+            }
+
             memcpy(&hvmemul_ctxt->insn_buf[insn_off], p_data, bytes);
             hvmemul_ctxt->insn_buf_bytes = insn_off + bytes;
         }
@@ -984,7 +995,7 @@ static int hvmemul_write(
 
     if ( is_x86_system_segment(seg) )
         pfec |= PFEC_implicit;
-    else if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    else if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     rc = hvmemul_virtual_to_linear(
@@ -1161,7 +1172,7 @@ static int hvmemul_rep_ins(
     if ( rc != X86EMUL_OKAY )
         return rc;
 
-    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     rc = hvmemul_linear_to_phys(
@@ -1230,7 +1241,7 @@ static int hvmemul_rep_outs(
     if ( rc != X86EMUL_OKAY )
         return rc;
 
-    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     rc = hvmemul_linear_to_phys(
@@ -1277,7 +1288,7 @@ static int hvmemul_rep_movs(
     if ( rc != X86EMUL_OKAY )
         return rc;
 
-    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     if ( vio->mmio_access.read_access &&
@@ -1435,7 +1446,7 @@ static int hvmemul_rep_stos(
     {
         uint32_t pfec = PFEC_page_present | PFEC_write_access;
 
-        if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+        if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
             pfec |= PFEC_user_mode;
 
         rc = hvmemul_linear_to_phys(addr, &gpa, bytes_per_rep, reps, pfec,
@@ -2133,17 +2144,17 @@ void hvm_emulate_init_per_insn(
     hvmemul_ctxt->ctxt.lma = hvm_long_mode_active(curr);
 
     if ( hvmemul_ctxt->ctxt.lma &&
-         hvmemul_ctxt->seg_reg[x86_seg_cs].attr.fields.l )
+         hvmemul_ctxt->seg_reg[x86_seg_cs].l )
         hvmemul_ctxt->ctxt.addr_size = hvmemul_ctxt->ctxt.sp_size = 64;
     else
     {
         hvmemul_ctxt->ctxt.addr_size =
-            hvmemul_ctxt->seg_reg[x86_seg_cs].attr.fields.db ? 32 : 16;
+            hvmemul_ctxt->seg_reg[x86_seg_cs].db ? 32 : 16;
         hvmemul_ctxt->ctxt.sp_size =
-            hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.db ? 32 : 16;
+            hvmemul_ctxt->seg_reg[x86_seg_ss].db ? 32 : 16;
     }
 
-    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].attr.fields.dpl == 3 )
+    if ( hvmemul_ctxt->seg_reg[x86_seg_ss].dpl == 3 )
         pfec |= PFEC_user_mode;
 
     hvmemul_ctxt->insn_buf_eip = hvmemul_ctxt->ctxt.regs->rip;
