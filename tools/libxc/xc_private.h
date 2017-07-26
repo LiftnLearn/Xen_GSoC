@@ -229,11 +229,11 @@ static inline int do_xen_version(xc_interface *xch, int cmd, xc_hypercall_buffer
                     cmd, HYPERCALL_BUFFER_AS_ARG(dest));
 }
 
-static inline int do_edge_trace(xc_interface *xch, domid_t dom_id, int mode,
-                                unsigned int size, xc_hypercall_buffer_t *buf)
+static inline int do_trace_pc(xc_interface *xch, domid_t dom_id, int mode,
+                              unsigned int size, xc_hypercall_buffer_t *buf)
 {
     DECLARE_HYPERCALL_BUFFER_ARGUMENT(buf);
-    return xencall4(xch->xcall, __HYPERVISOR_edge_trace, dom_id, mode,
+    return xencall4(xch->xcall, __HYPERVISOR_trace_pc, dom_id, mode,
         size, HYPERCALL_BUFFER_AS_ARG(buf));
 }
 

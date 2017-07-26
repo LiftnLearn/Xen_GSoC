@@ -530,7 +530,7 @@ int xc_version(xc_interface *xch, int cmd, void *arg)
     return rc;
 }
 
-int xc_edge_trace(xc_interface *xch,
+int xc_trace_pc(xc_interface *xch,
     domid_t dom_id, int mode, unsigned int size, uint64_t* arg)
 {
     int rc;
@@ -540,11 +540,11 @@ int xc_edge_trace(xc_interface *xch,
 
     if ( xc_hypercall_bounce_pre(xch, arg) )
     {
-        PERROR("Could not bounce buffer for edge_trace hypercall");
+        PERROR("Could not bounce buffer for trace_pc hypercall");
         return -ENOMEM;
     }
 
-    rc = do_edge_trace(xch, dom_id, mode, size, HYPERCALL_BUFFER(arg));
+    rc = do_trace_pc(xch, dom_id, mode, size, HYPERCALL_BUFFER(arg));
 
     xc_hypercall_bounce_post(xch, arg);
 

@@ -79,8 +79,8 @@ static const hypercall_table_t pv_hypercall_table[] = {
 #endif
     HYPERCALL(xenpmu_op),
     COMPAT_CALL(dm_op),
-    HYPERCALL(edge_trace),
     HYPERCALL(mca),
+    HYPERCALL(trace_pc),
     HYPERCALL(arch_1),
 };
 

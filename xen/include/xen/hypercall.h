@@ -83,7 +83,7 @@ do_xen_version(
     XEN_GUEST_HANDLE_PARAM(void) arg);
 
 extern long
-do_edge_trace(
+do_trace_pc(
     domid_t dom_id,
     int mode,
     unsigned int size,
