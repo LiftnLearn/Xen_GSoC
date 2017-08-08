@@ -64,10 +64,11 @@ long do_trace_pc(domid_t dom, int mode, unsigned int size,
 
         if ( copy_to_guest(buf, temp, d->tracing_buffer_pos) )
             ret = -EFAULT;
+        else
+            ret = d->tracing_buffer_pos;
 
         xfree(temp);
 
-        ret = d->tracing_buffer_pos;
         break;
     }
 
